@@ -1,5 +1,9 @@
 import os
+import certifi
 from dotenv import load_dotenv
+
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
