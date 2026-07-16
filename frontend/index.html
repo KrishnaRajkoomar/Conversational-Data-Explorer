@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Conversational Data Explorer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; color: #1a1a2e; min-height: 100vh; }
+header { background: #1a1a2e; color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+header h1 { font-size: 18px; font-weight: 600; }
+.badge { background: #2ecc71; color: #fff; font-size: 12px; padding: 4px 10px; border-radius: 12px; font-weight: 500; }
+.container { max-width: 900px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; height: calc(100vh - 60px); }
+.chat { flex: 1; overflow-y: auto; padding: 8px 0; }
+.msg { margin-bottom: 16px; }
+.msg-question { background: #fff; border-radius: 12px 12px 4px 12px; padding: 12px 16px; margin-left: 40px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+.msg-question strong { color: #1a1a2e; font-size: 13px; }
+.msg-question p { margin-top: 4px; color: #333; }
+.msg-response { background: #fff; border-radius: 12px 12px 12px 4px; padding: 12px 16px; margin-right: 40px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+.msg-response .answer { font-size: 15px; line-height: 1.5; margin-bottom: 8px; }
+.msg-response .error { color: #e74c3c; font-weight: 500; }
+.sql-toggle { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 12px; color: #6c757d; display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; }
+.sql-toggle:hover { background: #e9ecef; }
+.sql-block { display: none; margin-top: 8px; }
+.sql-block.open { display: block; }
+.sql-block pre { background: #1a1a2e; color: #e8e8e8; padding: 12px; border-radius: 6px; font-size: 13px; overflow-x: auto; }
+.table-wrap { overflow-x: auto; margin-top: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { background: #f8f9fa; padding: 8px 10px; text-align: left; border-bottom: 2px solid #dee2e6; font-weight: 600; color: #495057; white-space: nowrap; }
+td { padding: 8px 10px; border-bottom: 1px solid #e9ecef; }
+tr:hover td { background: #f8f9fa; }
+.chart-wrap { margin-top: 12px; padding: 8px; max-height: 300px; }
+.chart-wrap canvas { max-height: 280px; }
+.input-area { display: flex; gap: 8px; padding: 12px 0; }
+.input-area input { flex: 1; padding: 12px 16px; border: 2px solid #dee2e6; border-radius: 10px; font-size: 14px; outline: none; }
+.input-area input:focus { border-color: #1a1a2e; }
+.input-area button { padding: 12px 24px; background: #1a1a2e; color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.input-area button:hover { background: #2d2d5e; }
+.input-area button:disabled { opacity: .5; cursor: not-allowed; }
+.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin .6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.empty-state { text-align: center; color: #adb5bd; padding: 60px 20px; }
+.empty-state h2 { font-size: 22px; margin-bottom: 8px; }
+.empty-state p { font-size: 14px; }
+.examples { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 16px; }
+.examples button { background: #fff; border: 1px solid #dee2e6; border-radius: 16px; padding: 6px 14px; font-size: 12px; cursor: pointer; color: #495057; }
+.examples button:hover { border-color: #1a1a2e; color: #1a1a2e; }
+th.sorted-asc::after { content: ' \25B4'; }
+th.sorted-desc::after { content: ' \25BE'; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Conversational Data Explorer</h1>
+  <span class="badge">read-only · safe</span>
+</header>
+<div class="container">
+  <div class="chat" id="chat">
+    <div class="empty-state" id="empty-state">
+      <h2>Ask your data a question</h2>
+      <p>Type a question in plain English and get an answer from the database.</p>
+      <div class="examples">
+        <button onclick="ask('How many customers do we have in each region?')">Customers per region</button>
+        <button onclick="ask('What are the top 5 orders by amount?')">Top 5 orders</button>
+        <button onclick="ask('How many orders are pending vs delivered?')">Orders by status</button>
+        <button onclick="ask('What is the total revenue?')">Total revenue</button>
+      </div>
+    </div>
+  </div>
+  <div class="input-area">
+    <input type="text" id="input" placeholder="Ask a question about your data..." onkeydown="if(event.key==='Enter')send()">
+    <button id="send-btn" onclick="send()">Ask</button>
+  </div>
+</div>
+<script>
+let charts = {};
+
+function addMessage(html, cls) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + cls;
+  el.innerHTML = html;
+  document.getElementById('chat').appendChild(el);
+  el.scrollIntoView({ behavior: 'smooth' });
+}
+
+function showEmpty(val) {
+  document.getElementById('empty-state').style.display = val ? 'block' : 'none';
+}
+
+function ask(q) {
+  document.getElementById('input').value = q;
+  send();
+}
+
+async function send() {
+  const input = document.getElementById('input');
+  const btn = document.getElementById('send-btn');
+  const q = input.value.trim();
+  if (!q) return;
+
+  showEmpty(false);
+  addMessage('<strong>You</strong><p>' + escapeHtml(q) + '</p>', 'msg-question');
+  input.value = '';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+
+  try {
+    const r = await fetch('/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q }),
+    });
+    const d = await r.json();
+    if (!d.ok && d.error === '') d.error = 'Server returned an error';
+    renderResponse(d);
+  } catch (e) {
+    addMessage('<strong>Error</strong><p class="error">Could not reach the server. Make sure it is running.</p>', 'msg-response');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = 'Ask';
+}
+
+function renderResponse(d) {
+  let html = '<div class="answer">';
+  if (!d.ok) {
+    html += '<span class="error">' + escapeHtml(d.error) + '</span>';
+  } else {
+    html += escapeHtml(d.answer);
+  }
+  html += '</div>';
+
+  if (d.ok && d.rows && d.rows.length > 0) {
+    if (shouldChart(d.columns, d.rows)) {
+      const chartId = 'chart-' + Date.now();
+      html += '<div class="chart-wrap"><canvas id="' + chartId + '"></canvas></div>';
+      html += '</div>';
+      html += '<div class="sql-toggle" onclick="toggleSql(this)">\u25B6 SQL</div>';
+      html += '<div class="sql-block"><pre>' + escapeHtml(d.sql) + '</pre></div>';
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        d.columns.map(c => '<th onclick="sortTable(this)">' + escapeHtml(c) + '</th>').join('') +
+        '</tr></thead><tbody>' +
+        d.rows.map(r => '<tr>' + r.map(v => '<td>' + escapeHtml(String(v ?? '')) + '</td>').join('') + '</tr>').join('') +
+        '</tbody></table></div>';
+      addMessage(html, 'msg-response');
+      drawChart(chartId, d.columns, d.rows);
+    } else {
+      html += '<div class="sql-toggle" onclick="toggleSql(this)">\u25B6 SQL</div>';
+      html += '<div class="sql-block"><pre>' + escapeHtml(d.sql) + '</pre></div>';
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        d.columns.map(c => '<th onclick="sortTable(this)">' + escapeHtml(c) + '</th>').join('') +
+        '</tr></thead><tbody>' +
+        d.rows.map(r => '<tr>' + r.map(v => '<td>' + escapeHtml(String(v ?? '')) + '</td>').join('') + '</tr>').join('') +
+        '</tbody></table></div>';
+      addMessage(html, 'msg-response');
+    }
+  } else if (d.ok) {
+    html += '<div class="sql-toggle" onclick="toggleSql(this)">\u25B6 SQL</div>';
+    html += '<div class="sql-block"><pre>' + escapeHtml(d.sql) + '</pre></div>';
+    addMessage(html, 'msg-response');
+  } else {
+    html += '<div class="sql-toggle" onclick="toggleSql(this)">\u25B6 SQL</div>';
+    html += '<div class="sql-block"><pre>' + escapeHtml(d.sql) + '</pre></div>';
+    addMessage(html, 'msg-response');
+  }
+}
+
+function shouldChart(cols, rows) {
+  if (cols.length < 2) return false;
+  if (rows.length > 20) return false;
+  return true;
+}
+
+function drawChart(id, cols, rows) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  let labels, values;
+  const col0 = rows.map(r => r[0]);
+  const col1 = rows.map(r => Number(r[1]));
+
+  if (col1.some(v => !isNaN(v))) {
+    labels = col0;
+    values = col1;
+  } else {
+    canvas.parentElement.innerHTML = '';
+    return;
+  }
+
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: cols[1],
+        data: values,
+        backgroundColor: 'rgba(26, 26, 46, 0.7)',
+        borderColor: 'rgba(26, 26, 46, 1)',
+        borderWidth: 1,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true } }
+    }
+  });
+}
+
+function toggleSql(el) {
+  const block = el.nextElementSibling;
+  if (block && block.classList.contains('sql-block')) {
+    block.classList.toggle('open');
+    el.innerHTML = block.classList.contains('open') ? '\u25BC SQL' : '\u25B6 SQL';
+  }
+}
+
+function sortTable(th) {
+  const table = th.closest('table');
+  const tbody = table.querySelector('tbody');
+  const idx = Array.from(th.parentNode.children).indexOf(th);
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  const desc = th.classList.contains('sorted-asc');
+  th.parentNode.querySelectorAll('th').forEach(h => h.classList.remove('sorted-asc', 'sorted-desc'));
+  th.classList.add(desc ? 'sorted-desc' : 'sorted-asc');
+  rows.sort((a, b) => {
+    const av = a.children[idx].textContent.trim();
+    const bv = b.children[idx].textContent.trim();
+    const an = parseFloat(av), bn = parseFloat(bv);
+    if (!isNaN(an) && !isNaN(bn)) return desc ? bn - an : an - bn;
+    return desc ? bv.localeCompare(av) : av.localeCompare(bv);
+  });
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>
